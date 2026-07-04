@@ -14,13 +14,14 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class InventoryService {
+    
     private final InventoryRepository inventoryRepository;
 
     @Transactional(readOnly = true)
     public List<InventoryResponse> isInStock(List<String> skuCode) {
         List<InventoryResponse> inventoryResponses = inventoryRepository.findBySkuCodeIn(skuCode).stream()
-        .map(this::mapToInventoryResponse)
-        .toList();
+                .map(this::mapToInventoryResponse)
+                .toList();
         return inventoryResponses;
     }
 
