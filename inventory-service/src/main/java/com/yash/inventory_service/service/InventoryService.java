@@ -14,7 +14,7 @@ import lombok.RequiredArgsConstructor;
 @Service
 @RequiredArgsConstructor
 public class InventoryService {
-    
+
     private final InventoryRepository inventoryRepository;
 
     @Transactional(readOnly = true)
