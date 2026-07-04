@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST http://localhost:8091/actuator/shutdown)",
+      "Bash(pkill -f \"spring-boot-maven-plugin:4.0.7:run\")",
+      "Bash(nohup mvn -pl order-service org.springframework.boot:spring-boot-maven-plugin:4.0.7:run '-Dspring-boot.run.arguments=--server.port=8091 --eureka.client.enabled=false --spring.cloud.discovery.enabled=false')",
+      "Bash(echo \"relaunching pid $!...\")",
+      "Bash(break)"
+    ]
+  }
+}
