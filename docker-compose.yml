@@ -1,25 +1,7 @@
 services:
-  zipkin:
-    image: openzipkin/zipkin:3
-    container_name: zipkin
-    ports:
-      - "9411:9411"
-
-  keycloak:
-    image: quay.io/keycloak/keycloak:26.0
-    container_name: keycloak
-    command:
-      - start-dev
-      - --import-realm
-    ports:
-      - "8181:8080"
-    environment:
-      KC_BOOTSTRAP_ADMIN_USERNAME: admin
-      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
-      KC_HEALTH_ENABLED: "true"
-    volumes:
-      - ./keycloak/realms:/opt/keycloak/data/import
-
+  ## ------------------------------------------------------------------
+  ## Infrastructure
+  ## ------------------------------------------------------------------
   zookeeper:
     image: confluentinc/cp-zookeeper:7.0.1
     container_name: zookeeper
@@ -42,3 +24,173 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+  zipkin:
+    image: openzipkin/zipkin:3
+    container_name: zipkin
+    ports:
+      - "9411:9411"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: keycloak
+    command:
+      - start-dev
+      - --import-realm
+    ports:
+      - "8181:8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - ./keycloak/realms:/opt/keycloak/data/import
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "5963"
+    volumes:
+      - ./mysql/init:/docker-entrypoint-initdb.d
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p5963"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mongo:
+    image: mongo:7
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ## ------------------------------------------------------------------
+  ## Applications
+  ## ------------------------------------------------------------------
+  discovery-server:
+    image: yaswanthkutagolla/discovery-server:latest
+    build:
+      context: ./discovery-server
+      dockerfile: Dockerfile.layered
+    container_name: discovery-server
+    ports:
+      - "8761:8761"
+    environment:
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+    depends_on:
+      - zipkin
+
+  api-gateway:
+    image: yaswanthkutagolla/api-gateway:latest
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile.layered
+    container_name: api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+      # Validate the iss claim against localhost:8181 (from application.properties),
+      # but fetch signing keys from the reachable in-network Keycloak.
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/microservices-parent/protocol/openid-connect/certs
+    depends_on:
+      - discovery-server
+      - keycloak
+      - zipkin
+
+  product-service:
+    image: yaswanthkutagolla/product-service:latest
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile.layered
+    container_name: product-service
+    environment:
+      SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/product-service
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka
+      EUREKA_INSTANCE_PREFER_IP_ADDRESS: "true"
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+    depends_on:
+      mongo:
+        condition: service_healthy
+      discovery-server:
+        condition: service_started
+      zipkin:
+        condition: service_started
+
+  order-service:
+    image: yaswanthkutagolla/order-service:latest
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile.layered
+    container_name: order-service
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/order-service
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: broker:29092
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka
+      EUREKA_INSTANCE_PREFER_IP_ADDRESS: "true"
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+    depends_on:
+      mysql:
+        condition: service_healthy
+      broker:
+        condition: service_started
+      discovery-server:
+        condition: service_started
+      zipkin:
+        condition: service_started
+
+  inventory-service:
+    image: yaswanthkutagolla/inventory-service:latest
+    build:
+      context: ./inventory-service
+      dockerfile: Dockerfile.layered
+    container_name: inventory-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/inventory-service
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka
+      EUREKA_INSTANCE_PREFER_IP_ADDRESS: "true"
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+    depends_on:
+      mysql:
+        condition: service_healthy
+      discovery-server:
+        condition: service_started
+      zipkin:
+        condition: service_started
+
+  notification-service:
+    image: yaswanthkutagolla/notification-service:latest
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile.layered
+    container_name: notification-service
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: broker:29092
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka
+      EUREKA_INSTANCE_PREFER_IP_ADDRESS: "true"
+      MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
+    depends_on:
+      broker:
+        condition: service_started
+      discovery-server:
+        condition: service_started
+      zipkin:
+        condition: service_started
+
+volumes:
+  mysql-data:
+  mongo-data:
